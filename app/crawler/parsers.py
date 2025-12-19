@@ -128,25 +128,45 @@ def parse_story_detail(html: str, url: str) -> Dict[str, Any]:
 def parse_chapter_list(soup: BeautifulSoup, start_index: int = 1) -> List[Dict[str, Any]]:
     """
     Parse chapter list from story page
+    Filters out pagination links and only keeps real chapter links
     """
     chapters = []
     
     # Find chapter links
     chapter_links = soup.select(".list-chapter a, #list-chapter a")
     
-    for i, link in enumerate(chapter_links, start=start_index):
+    valid_index = start_index
+    for link in chapter_links:
         try:
             href = link.get("href", "")
             title = link.get_text(strip=True)
             
+            # Skip pagination links (they don't contain 'chuong' in URL)
+            if not href or "chuong" not in href.lower():
+                continue
+            
+            # Skip if title is just a number (pagination like "1", "2", "3")
+            if title.isdigit():
+                continue
+            
+            # Skip empty or very short titles
+            if len(title) < 2:
+                continue
+            
             # Extract chapter number from title or URL
-            chapter_num = extract_chapter_number(title, href) or i
+            chapter_num = extract_chapter_number(title, href)
+            
+            # If we couldn't extract from title/URL, use sequential index
+            if not chapter_num:
+                chapter_num = valid_index
             
             chapters.append({
                 "chapter_number": chapter_num,
                 "title": title,
                 "source_url": urljoin(BASE_URL, href),
             })
+            valid_index += 1
+            
         except Exception as e:
             print(f"Error parsing chapter: {e}")
             continue
