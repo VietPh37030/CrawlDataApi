@@ -336,10 +336,40 @@ async def get_chapter_list(
 async def read_chapter(chapter_id: str, db: Database = Depends(get_db)):
     """
     7. Đọc nội dung chương (Read Chapter)
+    Nếu chưa có content, sẽ tự động crawl từ source_url
     """
     chapter = await db.get_chapter_by_id(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chương không tồn tại")
+    
+    content = chapter.get("content", "")
+    
+    # Nếu content trống, crawl real-time từ source_url
+    if not content and chapter.get("source_url"):
+        try:
+            import httpx
+            from ..crawler.parsers import parse_chapter_content
+            
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.get(chapter["source_url"])
+                response.raise_for_status()
+                
+                # Parse content từ HTML
+                parsed = parse_chapter_content(response.text, chapter["source_url"])
+                content = parsed.get("content", "")
+                
+                # Lưu vào DB để lần sau không cần crawl lại
+                if content:
+                    await db.upsert_chapter({
+                        "story_id": chapter["story_id"],
+                        "chapter_number": chapter["chapter_number"],
+                        "title": chapter["title"],
+                        "source_url": chapter["source_url"],
+                        "content": content,
+                    })
+        except Exception as e:
+            print(f"Error fetching chapter content: {e}")
+            content = f"Lỗi tải nội dung: {str(e)}"
     
     # Get prev/next chapters
     story_id = chapter.get("story_id")
@@ -353,7 +383,7 @@ async def read_chapter(chapter_id: str, db: Database = Depends(get_db)):
         "novel_id": story_id,
         "chapter_number": chapter_num,
         "title": chapter.get("title"),
-        "content": chapter.get("content", ""),
+        "content": content,
         "navigation": {
             "prev_chapter_id": prev_chapter.get("id") if prev_chapter else None,
             "next_chapter_id": next_chapter.get("id") if next_chapter else None
