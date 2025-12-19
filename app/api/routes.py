@@ -189,6 +189,54 @@ async def bulk_crawl(
 
 
 # ==========================================================================
+# SCHEDULER CONTROL API (Auto-crawl & Manual crawl)
+# ==========================================================================
+
+from ..scheduler import scheduler
+
+@router.get("/api/v1/scheduler/status", tags=["Scheduler"])
+async def get_scheduler_status():
+    """Lấy trạng thái scheduler"""
+    return scheduler.get_status()
+
+
+@router.post("/api/v1/scheduler/auto/start", tags=["Scheduler"])
+async def start_auto_crawl():
+    """Bật auto-crawl (mỗi 15 phút)"""
+    result = await scheduler.start_auto_crawl()
+    return result
+
+
+@router.post("/api/v1/scheduler/auto/stop", tags=["Scheduler"])
+async def stop_auto_crawl():
+    """Tắt auto-crawl"""
+    result = scheduler.stop_auto_crawl()
+    return result
+
+
+@router.post("/api/v1/scheduler/manual", tags=["Scheduler"])
+async def trigger_manual_crawl(request: dict, background_tasks: BackgroundTasks):
+    """
+    Chạy crawl thủ công (chạy liên tục cho đến khi xong)
+    
+    Body: {
+        "categories": ["hot", "new", "completed"],
+        "max_pages": 5
+    }
+    """
+    categories = request.get("categories", ["new"])
+    max_pages = request.get("max_pages", 2)
+    
+    # Chạy trong background
+    background_tasks.add_task(scheduler.manual_crawl, categories, max_pages)
+    
+    return {
+        "status": "started",
+        "message": f"Manual crawl started: {categories}, {max_pages} pages each"
+    }
+
+
+# ==========================================================================
 # PHẦN 2: READER API (Dành cho Web đọc truyện)
 # ==========================================================================
 
