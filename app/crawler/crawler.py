@@ -174,17 +174,20 @@ class StoryCrawler:
         Returns:
             List of story basic info
         """
-        all_stories = []
+        import httpx
+        from .parsers import get_pagination_info
         
-        async with create_browser() as browser:
-            async with browser.new_page() as page:
-                current_url = list_url
+        all_stories = []
+        current_url = list_url
+        
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            for page_num in range(max_pages):
+                print(f"📃 Crawling list page {page_num + 1}: {current_url}")
                 
-                for page_num in range(max_pages):
-                    print(f"📃 Crawling list page {page_num + 1}: {current_url}")
-                    
-                    await browser.navigate(page, current_url)
-                    html = await browser.get_page_content(page)
+                try:
+                    response = await client.get(current_url)
+                    response.raise_for_status()
+                    html = response.text
                     
                     # Parse stories on this page
                     stories = parse_story_list(html)
@@ -197,9 +200,13 @@ class StoryCrawler:
                     
                     if pagination["next_page_url"] and page_num < max_pages - 1:
                         current_url = pagination["next_page_url"]
-                        await human_delay(3, 6)
+                        await asyncio.sleep(2)  # Rate limiting
                     else:
                         break
+                        
+                except Exception as e:
+                    print(f"  ❌ Error crawling page {page_num + 1}: {e}")
+                    break
         
         return all_stories
     
