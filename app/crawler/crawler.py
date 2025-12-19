@@ -38,63 +38,63 @@ class StoryCrawler:
         Returns:
             Story data dict
         """
-        async with create_browser() as browser:
-            async with browser.new_page() as page:
-                print(f"📖 Crawling story: {url}")
+        import httpx
+        from bs4 import BeautifulSoup
+        from .parsers import parse_chapter_list, get_pagination_info
+        
+        print(f"📖 Crawling story: {url}")
+        
+        # Use httpx for story page (faster, no JS needed)
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # Fetch page 1
+            response = await client.get(url)
+            response.raise_for_status()
+            html = response.text
+            
+            # Parse story details
+            story = parse_story_detail(html, url)
+            
+            # Get all chapters from pagination
+            all_chapters = story.get("chapters", [])
+            pagination = get_pagination_info(html)
+            total_pages = pagination.get("total_pages", 1)
+            
+            if total_pages > 1:
+                print(f"📄 Found {total_pages} pages of chapters, fetching all...")
                 
-                # Navigate to story page
-                await browser.navigate(page, url)
-                html = await browser.get_page_content(page)
-                
-                # Parse story details (first page)
-                story = parse_story_detail(html, url)
-                
-                # 🔥 FIX: Crawl ALL pages of chapter list
-                all_chapters = story.get("chapters", [])
-                
-                # Check if there are more pages
-                from .parsers import get_pagination_info
-                pagination = get_pagination_info(html)
-                total_pages = pagination.get("total_pages", 1)
-                
-                if total_pages > 1:
-                    print(f"📄 Found {total_pages} pages of chapters, crawling all...")
-                    
-                    for page_num in range(2, total_pages + 1):
-                        try:
-                            # Build pagination URL (e.g., /ten-truyen/trang-2/)
-                            page_url = url.rstrip("/") + f"/trang-{page_num}/"
-                            print(f"  📃 Crawling page {page_num}: {page_url}")
-                            
-                            await browser.navigate(page, page_url)
-                            page_html = await browser.get_page_content(page)
-                            
-                            # Parse chapters from this page
-                            from bs4 import BeautifulSoup
-                            from .parsers import parse_chapter_list
-                            soup = BeautifulSoup(page_html, "lxml")
-                            page_chapters = parse_chapter_list(soup)
-                            
-                            all_chapters.extend(page_chapters)
-                            print(f"  ✅ Found {len(page_chapters)} chapters on page {page_num}")
-                            
-                        except Exception as e:
-                            print(f"  ⚠️ Error crawling page {page_num}: {e}")
-                            continue
-                
-                story["chapters"] = all_chapters
-                story["total_chapters"] = len(all_chapters)
-                
-                print(f"📚 Total chapters found: {len(all_chapters)}")
-                
-                # Optionally crawl chapter content
-                if include_chapters and story.get("chapters"):
-                    print(f"📚 Crawling {len(story['chapters'])} chapters...")
+                for page_num in range(2, total_pages + 1):
+                    try:
+                        page_url = url.rstrip("/") + f"/trang-{page_num}/#list-chapter"
+                        print(f"  📃 Fetching page {page_num}/{total_pages}")
+                        
+                        response = await client.get(page_url)
+                        response.raise_for_status()
+                        
+                        soup = BeautifulSoup(response.text, "lxml")
+                        page_chapters = parse_chapter_list(soup)
+                        
+                        all_chapters.extend(page_chapters)
+                        print(f"  ✅ +{len(page_chapters)} chapters")
+                        
+                    except Exception as e:
+                        print(f"  ⚠️ Error page {page_num}: {e}")
+                        continue
+            
+            story["chapters"] = all_chapters
+            story["total_chapters"] = len(all_chapters)
+            
+            print(f"📚 Total chapters found: {len(all_chapters)}")
+        
+        # Crawl chapter content (needs Playwright for anti-bot)
+        if include_chapters and story.get("chapters"):
+            print(f"📚 Crawling {len(story['chapters'])} chapter contents...")
+            async with create_browser() as browser:
+                async with browser.new_page() as page:
                     story["chapters"] = await self._crawl_chapters(
                         browser, page, story["chapters"]
                     )
-                
-                return story
+        
+        return story
     
     async def crawl_single_chapter(self, url: str) -> Dict[str, Any]:
         """
