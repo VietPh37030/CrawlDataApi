@@ -109,9 +109,22 @@ class CrawlScheduler:
             # nhưng VẪN lấy DANH SÁCH chapters (title, source_url, chapter_number)
             story = await crawler.crawl_story(url, include_chapters=False)
             
-            chapters = story.get("chapters", [])
+            raw_chapters = story.get("chapters", [])
+            
+            # Khử trùng lặp chapter_number trước khi lưu
+            # Vì Postgres không cho phép có 2 dòng cùng unique key trong 1 lệnh UPSERT batch
+            seen_chapters = {}
+            for ch in raw_chapters:
+                ch_num = ch.get("chapter_number")
+                if ch_num not in seen_chapters:
+                    seen_chapters[ch_num] = ch
+            
+            chapters = list(seen_chapters.values())
+            # Sắp xếp lại theo số chương
+            chapters.sort(key=lambda x: x.get("chapter_number", 0))
+            
             total_chapters = len(chapters)
-            self._log(f"  📋 Tìm thấy {total_chapters} chương")
+            self._log(f"  📋 Tìm thấy {len(raw_chapters)} chương (Khử trùng còn {total_chapters})")
             
             if total_chapters == 0:
                 self._log(f"  ⚠️ Không tìm thấy chapter nào, bỏ qua")

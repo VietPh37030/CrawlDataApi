@@ -71,7 +71,7 @@ class StoryCrawler:
                         response.raise_for_status()
                         
                         soup = BeautifulSoup(response.text, "lxml")
-                        page_chapters = parse_chapter_list(soup)
+                        page_chapters = parse_chapter_list(soup, start_index=len(all_chapters) + 1)
                         
                         all_chapters.extend(page_chapters)
                         print(f"  ✅ +{len(page_chapters)} chapters")

@@ -125,7 +125,7 @@ def parse_story_detail(html: str, url: str) -> Dict[str, Any]:
     return story
 
 
-def parse_chapter_list(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+def parse_chapter_list(soup: BeautifulSoup, start_index: int = 1) -> List[Dict[str, Any]]:
     """
     Parse chapter list from story page
     """
@@ -134,7 +134,7 @@ def parse_chapter_list(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     # Find chapter links
     chapter_links = soup.select(".list-chapter a, #list-chapter a")
     
-    for i, link in enumerate(chapter_links, start=1):
+    for i, link in enumerate(chapter_links, start=start_index):
         try:
             href = link.get("href", "")
             title = link.get_text(strip=True)
