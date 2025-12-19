@@ -97,61 +97,99 @@ class CrawlScheduler:
             self._log(f"❌ Lỗi crawl: {e}")
     
     async def _crawl_and_save_story(self, crawler, db, url: str):
-        """Crawl và lưu 1 truyện + chapters"""
+        """Crawl và lưu 1 truyện + TẤT CẢ chapters trước khi sang truyện khác"""
         # Extract title from URL for display
         slug = url.rstrip('/').split('/')[-1]
         self.current_story = slug
-        self._log(f"📖 Đang crawl: {slug}")
+        self._log(f"📖 Bắt đầu crawl: {slug}")
         
-        story = await crawler.crawl_story(url, include_chapters=False)
-        
-        # Lưu story
-        story_record = {
-            "slug": story["slug"],
-            "title": story["title"],
-            "author": story.get("author"),
-            "description": story.get("description"),
-            "genres": story.get("genres", []),
-            "status": "Full" if story.get("status") == "completed" else "Đang ra",
-            "total_chapters": story.get("total_chapters", 0),
-            "cover_url": story.get("cover_url"),
-            "source_url": story.get("source_url"),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        
-        saved_story = await db.upsert_story(story_record)
-        story_id = saved_story.get("id") if saved_story else None
-        
-        if not story_id:
-            existing = await db.get_story_by_slug(story["slug"])
-            story_id = existing["id"] if existing else None
-        
-        if not story_id:
-            self._log(f"  ❌ Không lưu được: {story['title']}")
+        try:
+            # Crawl story VÀ lấy danh sách chapters từ TẤT CẢ pages
+            # include_chapters=False nghĩa là không crawl NỘI DUNG chapter (chậm)
+            # nhưng VẪN lấy DANH SÁCH chapters (title, source_url, chapter_number)
+            story = await crawler.crawl_story(url, include_chapters=False)
+            
+            chapters = story.get("chapters", [])
+            total_chapters = len(chapters)
+            self._log(f"  📋 Tìm thấy {total_chapters} chương")
+            
+            if total_chapters == 0:
+                self._log(f"  ⚠️ Không tìm thấy chapter nào, bỏ qua")
+                return
+            
+            # Lưu story trước
+            story_record = {
+                "slug": story["slug"],
+                "title": story["title"],
+                "author": story.get("author"),
+                "description": story.get("description"),
+                "genres": story.get("genres", []),
+                "status": "Full" if story.get("status") == "completed" else "Đang ra",
+                "total_chapters": total_chapters,
+                "cover_url": story.get("cover_url"),
+                "source_url": story.get("source_url"),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            
+            saved_story = await db.upsert_story(story_record)
+            story_id = saved_story.get("id") if saved_story else None
+            
+            if not story_id:
+                existing = await db.get_story_by_slug(story["slug"])
+                story_id = existing["id"] if existing else None
+            
+            if not story_id:
+                self._log(f"  ❌ Không lưu được truyện: {story['title']}")
+                self.stats["errors"] += 1
+                return
+            
+            self._log(f"  ✅ Đã lưu truyện: {story['title'][:40]}")
+            
+            # Lưu TẤT CẢ chapters theo batch để tối ưu
+            saved_count = 0
+            batch_size = 50
+            
+            for i in range(0, total_chapters, batch_size):
+                if not self.is_running and not self.auto_enabled:
+                    self._log(f"  ⏹️ Đã dừng giữa chừng")
+                    break
+                    
+                batch = chapters[i:i + batch_size]
+                chapter_records = []
+                
+                for ch in batch:
+                    chapter_records.append({
+                        "story_id": story_id,
+                        "chapter_number": ch.get("chapter_number", 0),
+                        "title": ch.get("title", ""),
+                        "source_url": ch.get("source_url", ""),
+                        "content": "",  # Content sẽ crawl sau nếu cần
+                    })
+                
+                try:
+                    await db.bulk_upsert_chapters(chapter_records)
+                    saved_count += len(chapter_records)
+                    
+                    # Log tiến trình
+                    progress = min(i + batch_size, total_chapters)
+                    self._log(f"  📝 Đã lưu {progress}/{total_chapters} chapters")
+                except Exception as e:
+                    self._log(f"  ⚠️ Lỗi batch {i}: {e}")
+                    # Fallback: lưu từng chapter
+                    for ch_rec in chapter_records:
+                        try:
+                            await db.upsert_chapter(ch_rec)
+                            saved_count += 1
+                        except Exception:
+                            continue
+            
+            self.stats["stories_crawled"] += 1
+            self.stats["chapters_saved"] += saved_count
+            self._log(f"  🎉 Hoàn thành: {story['title'][:30]}... ({saved_count}/{total_chapters} chương)")
+            
+        except Exception as e:
+            self._log(f"  ❌ Lỗi crawl {slug}: {e}")
             self.stats["errors"] += 1
-            return
-        
-        # Lưu chapters
-        chapters = story.get("chapters", [])
-        saved_count = 0
-        
-        for ch in chapters:
-            try:
-                chapter_record = {
-                    "story_id": story_id,
-                    "chapter_number": ch.get("chapter_number", 0),
-                    "title": ch.get("title", ""),
-                    "source_url": ch.get("source_url", ""),
-                    "content": "",
-                }
-                await db.upsert_chapter(chapter_record)
-                saved_count += 1
-            except Exception:
-                continue
-        
-        self.stats["stories_crawled"] += 1
-        self.stats["chapters_saved"] += saved_count
-        self._log(f"  ✅ {story['title'][:30]}... ({saved_count} chương)")
     
     async def manual_crawl(self, categories: list, max_pages: int):
         """Crawl thủ công"""

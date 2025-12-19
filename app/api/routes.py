@@ -321,7 +321,9 @@ async def get_chapter_list(
         data.append({
             "id": ch.get("id"),
             "chapter_number": ch.get("chapter_number"),
-            "title": ch.get("title")
+            "title": ch.get("title"),
+            "source_url": ch.get("source_url"),
+            "created_at": ch.get("created_at"),
         })
     
     return {
