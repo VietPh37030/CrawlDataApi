@@ -145,6 +145,19 @@ class CrawlScheduler:
                 return
             
             # Lưu story trước
+            cover_url = story.get("cover_url")
+            
+            # Upload cover to Cloudinary if not already there
+            if cover_url and "cloudinary.com" not in cover_url:
+                try:
+                    from .cloudinary_utils import upload_cover_from_url
+                    new_cover_url = await upload_cover_from_url(cover_url, story["slug"])
+                    if new_cover_url:
+                        cover_url = new_cover_url
+                        self._log(f"  🖼️ Cover uploaded to Cloudinary")
+                except Exception as e:
+                    self._log(f"  ⚠️ Cover upload failed: {e}")
+            
             story_record = {
                 "slug": story["slug"],
                 "title": story["title"],
@@ -153,7 +166,7 @@ class CrawlScheduler:
                 "genres": story.get("genres", []),
                 "status": "Full" if story.get("status") == "completed" else "Đang ra",
                 "total_chapters": total_chapters,
-                "cover_url": story.get("cover_url"),
+                "cover_url": cover_url,
                 "source_url": story.get("source_url"),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
