@@ -842,3 +842,104 @@ async def preview_story(slug: str):
         return story
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================================================
+# SYSTEM MONITORING (Real-time health check)
+# ==========================================================================
+
+import psutil
+from datetime import timedelta
+
+# Track server start time
+_server_start_time = datetime.now(timezone.utc)
+
+@router.get("/api/v1/system/health", tags=["System"])
+async def get_system_health(db: Database = Depends(get_db)):
+    """
+    Real-time system health monitoring
+    Returns DB usage, Storage usage, server stats for dashboard visualization
+    """
+    
+    # Database stats
+    try:
+        stories_count = await db.get_stories_count()
+        
+        # Get total chapters count
+        result = db.client.table("chapters").select("id", count="exact").execute()
+        chapters_count = result.count or 0
+        
+        # Get archived chapters count (content in storage)
+        archived_result = db.client.table("chapters").select("id", count="exact").eq("is_archived", True).execute()
+        archived_count = archived_result.count or 0
+        
+        # Estimate DB size (rough: ~1KB per chapter metadata, ~500 bytes per story)
+        estimated_db_mb = round((chapters_count * 0.001) + (stories_count * 0.0005), 2)
+        db_limit_mb = 500  # Supabase free tier
+        db_percent = min(round((estimated_db_mb / db_limit_mb) * 100, 1), 100)
+        
+    except Exception as e:
+        print(f"[Health] DB error: {e}")
+        stories_count = 0
+        chapters_count = 0
+        archived_count = 0
+        estimated_db_mb = 0
+        db_percent = 0
+    
+    # Storage stats
+    try:
+        # Estimate storage size (avg 7KB per chapter after GZIP)
+        estimated_storage_mb = round(archived_count * 0.007, 2)
+        storage_limit_mb = 1024  # 1GB free tier
+        storage_percent = min(round((estimated_storage_mb / storage_limit_mb) * 100, 1), 100)
+    except Exception as e:
+        print(f"[Health] Storage error: {e}")
+        estimated_storage_mb = 0
+        storage_percent = 0
+    
+    # Server stats
+    uptime = datetime.now(timezone.utc) - _server_start_time
+    uptime_str = str(timedelta(seconds=int(uptime.total_seconds())))
+    
+    # Memory usage (if available)
+    try:
+        memory = psutil.virtual_memory()
+        memory_percent = memory.percent
+        memory_used_mb = round(memory.used / (1024 * 1024), 0)
+    except:
+        memory_percent = 0
+        memory_used_mb = 0
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        
+        # Database (Supabase PostgreSQL)
+        "database": {
+            "stories": stories_count,
+            "chapters": chapters_count,
+            "archived_chapters": archived_count,
+            "estimated_mb": estimated_db_mb,
+            "limit_mb": db_limit_mb,
+            "percent_used": db_percent,
+            "status": "critical" if db_percent > 90 else "warning" if db_percent > 70 else "healthy"
+        },
+        
+        # Storage (Supabase Storage bucket)
+        "storage": {
+            "archived_chapters": archived_count,
+            "estimated_mb": estimated_storage_mb,
+            "limit_mb": storage_limit_mb,
+            "percent_used": storage_percent,
+            "status": "critical" if storage_percent > 90 else "warning" if storage_percent > 70 else "healthy"
+        },
+        
+        # Server
+        "server": {
+            "uptime": uptime_str,
+            "memory_percent": memory_percent,
+            "memory_used_mb": memory_used_mb,
+            "status": "healthy"
+        }
+    }
+
