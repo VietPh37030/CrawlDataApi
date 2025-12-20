@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional, List
 from collections import deque
+import gc  # Memory management
 
 class CrawlScheduler:
     def __init__(self):
@@ -261,8 +262,15 @@ class CrawlScheduler:
                         response = await client.get(ch["source_url"])
                         response.raise_for_status()
                         
-                        parsed = parse_chapter_content(response.text, ch["source_url"])
+                        # Parse and immediately release response memory
+                        html_text = response.text
+                        response = None  # Release response memory
+                        
+                        parsed = parse_chapter_content(html_text, ch["source_url"])
+                        html_text = None  # Release HTML memory
+                        
                         content = parsed.get("content", "")
+                        parsed = None  # Release parsed data
                         
                         if content:
                             # Save to Storage (GZIP)
@@ -271,6 +279,7 @@ class CrawlScheduler:
                                 ch["chapter_number"], 
                                 content
                             )
+                            content = None  # Release content memory
                             if success:
                                 content_saved += 1
                         
@@ -278,20 +287,25 @@ class CrawlScheduler:
                         self.progress["current_chapter"] = idx + 1
                         self.progress["percent"] = int(((idx + 1) / total_chapters) * 100)
                         
-                        # Rate limiting - 0.3s between requests
-                        await asyncio.sleep(0.3)
+                        # Rate limiting - 0.5s between requests (reduced from 0.3s for stability)
+                        await asyncio.sleep(0.5)
                         
                     except Exception as e:
                         content_errors += 1
                         if content_errors <= 3:
                             self._log(f"    ⚠️ Lỗi chương {ch.get('chapter_number')}: {str(e)[:50]}")
                     
-                    # Log progress every 100 chapters
-                    if (idx + 1) % 100 == 0:
+                    # Log progress and collect garbage every 50 chapters
+                    if (idx + 1) % 50 == 0:
+                        gc.collect()  # Force garbage collection
                         self._log(f"  📥 Progress: {idx+1}/{total_chapters} (saved: {content_saved})")
             
             self.progress["status"] = "done"
             self.progress["percent"] = 100
+            
+            # Final garbage collection
+            gc.collect()
+            
             self._log(f"  🎉 Hoàn thành: {story['title'][:30]}... ({content_saved}/{total_chapters} nội dung)")
             
             # Cập nhật thống kê vào database để charts hiển thị
