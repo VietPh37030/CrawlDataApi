@@ -73,8 +73,19 @@ class StoryCrawler:
                         soup = BeautifulSoup(response.text, "lxml")
                         page_chapters = parse_chapter_list(soup, start_index=len(all_chapters) + 1)
                         
+                        # Release memory immediately
+                        del soup
+                        del response
+                        
                         all_chapters.extend(page_chapters)
-                        print(f"  ✅ +{len(page_chapters)} chapters")
+                        del page_chapters
+                        print(f"  ✅ +chapters (total: {len(all_chapters)})")
+                        
+                        # Rate limit + gc every 5 pages
+                        await asyncio.sleep(0.5)
+                        if page_num % 5 == 0:
+                            import gc
+                            gc.collect()
                         
                     except Exception as e:
                         print(f"  ⚠️ Error page {page_num}: {e}")

@@ -236,6 +236,25 @@ async def trigger_manual_crawl(request: dict, background_tasks: BackgroundTasks)
     }
 
 
+@router.post("/api/v1/crawler/clear-data", tags=["Crawler"])
+async def clear_all_data(db: Database = Depends(get_db)):
+    """
+    XÓA TOÀN BỘ DATA - Stories, Chapters, và Storage
+    
+    ⚠️ CẢNH BÁO: Không thể hoàn tác!
+    Dùng để re-crawl từ đầu một cách sạch sẽ.
+    """
+    result = await db.clear_all_data()
+    
+    if result.get("success"):
+        return {
+            "status": "success",
+            "message": "Đã xóa toàn bộ data thành công!",
+            "details": result
+        }
+    else:
+        raise HTTPException(status_code=500, detail=f"Lỗi xóa data: {result.get('error')}")
+
 # ==========================================================================
 # PHẦN 2: READER API (Dành cho Web đọc truyện)
 # ==========================================================================

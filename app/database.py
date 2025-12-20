@@ -310,6 +310,46 @@ class Database:
         """Check if chapter content is saved in storage"""
         chapter = await self.get_chapter(story_id, chapter_number)
         return chapter.get("is_archived", False) if chapter else False
+    
+    async def clear_all_data(self) -> dict:
+        """
+        XÓA TOÀN BỘ DATA - Stories, Chapters, và Storage
+        Dùng để re-crawl từ đầu
+        """
+        try:
+            # 1. Delete all chapters first (foreign key constraint)
+            chapters_result = self.client.table("chapters").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+            chapters_deleted = len(chapters_result.data) if chapters_result.data else 0
+            
+            # 2. Delete all stories
+            stories_result = self.client.table("stories").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+            stories_deleted = len(stories_result.data) if stories_result.data else 0
+            
+            # 3. Clear storage bucket
+            storage_cleared = 0
+            try:
+                files = self.client.storage.from_(self.STORAGE_BUCKET).list()
+                for folder in files:
+                    if folder.get("name"):
+                        folder_files = self.client.storage.from_(self.STORAGE_BUCKET).list(folder["name"])
+                        for file in folder_files:
+                            if file.get("name"):
+                                self.client.storage.from_(self.STORAGE_BUCKET).remove([f"{folder['name']}/{file['name']}"])
+                                storage_cleared += 1
+            except Exception as e:
+                print(f"[Clear Storage] Warning: {e}")
+            
+            return {
+                "success": True,
+                "stories_deleted": stories_deleted,
+                "chapters_deleted": chapters_deleted,
+                "storage_files_cleared": storage_cleared
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
 
 # Singleton instance
