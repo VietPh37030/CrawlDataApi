@@ -226,13 +226,77 @@ class CrawlScheduler:
             
             self.stats["stories_crawled"] += 1
             self.stats["chapters_saved"] += saved_count
+            self.progress["status"] = "syncing_content"
+            self._log(f"  ✅ Đã lưu metadata: {saved_count}/{total_chapters} chương")
+            
+            # ===== PHASE 2: Crawl nội dung tất cả chapters =====
+            self._log(f"  📥 Đang tải nội dung (offline mode)...")
+            
+            import httpx
+            from .crawler.parsers import parse_chapter_content
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "vi-VN,vi;q=0.9",
+                "Referer": "https://truyenfull.vision/",
+            }
+            
+            content_saved = 0
+            content_errors = 0
+            
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as client:
+                for idx, ch in enumerate(chapters):
+                    if not self.is_running and not self.auto_enabled:
+                        self._log(f"  ⏹️ Dừng tải nội dung")
+                        break
+                    
+                    try:
+                        # Check if already archived
+                        is_archived = await db.is_chapter_archived(story_id, ch["chapter_number"])
+                        if is_archived:
+                            content_saved += 1
+                            continue
+                        
+                        # Fetch content from source
+                        response = await client.get(ch["source_url"])
+                        response.raise_for_status()
+                        
+                        parsed = parse_chapter_content(response.text, ch["source_url"])
+                        content = parsed.get("content", "")
+                        
+                        if content:
+                            # Save to Storage (GZIP)
+                            success = await db.upload_chapter_content(
+                                story_id, 
+                                ch["chapter_number"], 
+                                content
+                            )
+                            if success:
+                                content_saved += 1
+                        
+                        # Progress update
+                        self.progress["current_chapter"] = idx + 1
+                        self.progress["percent"] = int(((idx + 1) / total_chapters) * 100)
+                        
+                        # Rate limiting - 0.3s between requests
+                        await asyncio.sleep(0.3)
+                        
+                    except Exception as e:
+                        content_errors += 1
+                        if content_errors <= 3:
+                            self._log(f"    ⚠️ Lỗi chương {ch.get('chapter_number')}: {str(e)[:50]}")
+                    
+                    # Log progress every 100 chapters
+                    if (idx + 1) % 100 == 0:
+                        self._log(f"  📥 Progress: {idx+1}/{total_chapters} (saved: {content_saved})")
+            
             self.progress["status"] = "done"
             self.progress["percent"] = 100
-            self._log(f"  🎉 Hoàn thành: {story['title'][:30]}... ({saved_count}/{total_chapters} chương)")
+            self._log(f"  🎉 Hoàn thành: {story['title'][:30]}... ({content_saved}/{total_chapters} nội dung)")
             
             # Cập nhật thống kê vào database để charts hiển thị
             try:
-                await db.update_crawl_stats(stories=1, chapters=saved_count)
+                await db.update_crawl_stats(stories=1, chapters=content_saved)
             except Exception as stats_error:
                 self._log(f"  ⚠️ Lỗi cập nhật stats: {stats_error}")
             
