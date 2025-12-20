@@ -303,7 +303,7 @@ async def get_novel_detail(novel_id: str, db: Database = Depends(get_db)):
 async def get_chapter_list(
     novel_id: str,
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=10000),
+    limit: int = Query(50, ge=1),  # No max limit
     db: Database = Depends(get_db)
 ):
     """
