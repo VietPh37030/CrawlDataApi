@@ -122,6 +122,84 @@ class Database:
         """Update task status"""
         result = self.client.table("crawl_tasks").update(task_data).eq("id", task_id).execute()
         return result.data[0] if result.data else None
+    
+    # ========== Genres ==========
+    
+    async def get_or_create_genre(self, name: str, slug: str) -> dict:
+        """Get genre by name or create if not exists"""
+        result = self.client.table("genres").select("*").eq("slug", slug).execute()
+        if result.data:
+            return result.data[0]
+        # Create new
+        new_genre = {"name": name, "slug": slug}
+        result = self.client.table("genres").insert(new_genre).execute()
+        return result.data[0] if result.data else None
+    
+    async def link_story_genre(self, story_id: str, genre_id: str):
+        """Link story to genre"""
+        try:
+            self.client.table("story_genres").upsert({
+                "story_id": story_id, 
+                "genre_id": genre_id
+            }).execute()
+        except Exception:
+            pass  # Ignore duplicate
+    
+    async def get_genres(self) -> list:
+        """Get all genres with story count"""
+        result = self.client.table("genres").select("*").order("story_count", desc=True).execute()
+        return result.data or []
+    
+    # ========== Crawl Stats ==========
+    
+    async def update_crawl_stats(self, stories: int = 0, chapters: int = 0, content: int = 0, errors: int = 0):
+        """Update today's crawl statistics"""
+        from datetime import date
+        today = date.today().isoformat()
+        
+        # Try to get existing record
+        result = self.client.table("crawl_stats").select("*").eq("date", today).execute()
+        
+        if result.data:
+            # Update existing
+            existing = result.data[0]
+            self.client.table("crawl_stats").update({
+                "stories_crawled": existing["stories_crawled"] + stories,
+                "chapters_crawled": existing["chapters_crawled"] + chapters,
+                "content_fetched": existing["content_fetched"] + content,
+                "errors": existing["errors"] + errors,
+            }).eq("date", today).execute()
+        else:
+            # Create new
+            self.client.table("crawl_stats").insert({
+                "date": today,
+                "stories_crawled": stories,
+                "chapters_crawled": chapters,
+                "content_fetched": content,
+                "errors": errors,
+            }).execute()
+    
+    async def get_crawl_stats(self, days: int = 7) -> list:
+        """Get crawl stats for last N days"""
+        result = self.client.table("crawl_stats").select("*").order("date", desc=True).limit(days).execute()
+        return result.data or []
+    
+    # ========== Reading History ==========
+    
+    async def add_reading_history(self, user_id: str, story_id: str, chapter_id: str):
+        """Add reading history entry"""
+        self.client.table("reading_history").insert({
+            "user_id": user_id,
+            "story_id": story_id,
+            "chapter_id": chapter_id,
+        }).execute()
+    
+    async def get_reading_history(self, user_id: str, limit: int = 20) -> list:
+        """Get user's reading history"""
+        result = self.client.table("reading_history").select(
+            "*, stories(id, title, cover_url), chapters(id, chapter_number, title)"
+        ).eq("user_id", user_id).order("read_at", desc=True).limit(limit).execute()
+        return result.data or []
 
 
 # Singleton instance
