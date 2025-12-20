@@ -220,6 +220,12 @@ class CrawlScheduler:
             self.progress["percent"] = 100
             self._log(f"  🎉 Hoàn thành: {story['title'][:30]}... ({saved_count}/{total_chapters} chương)")
             
+            # Cập nhật thống kê vào database để charts hiển thị
+            try:
+                await db.update_crawl_stats(stories=1, chapters=saved_count)
+            except Exception as stats_error:
+                self._log(f"  ⚠️ Lỗi cập nhật stats: {stats_error}")
+            
         except Exception as e:
             self._log(f"  ❌ Lỗi crawl {slug}: {e}")
             self.stats["errors"] += 1
