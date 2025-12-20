@@ -295,15 +295,15 @@ class CrawlScheduler:
                         if content_errors <= 3:
                             self._log(f"    ⚠️ Lỗi chương {ch.get('chapter_number')}: {str(e)[:50]}")
                     
-                    # Log progress and collect garbage every 50 chapters
-                    if (idx + 1) % 50 == 0:
+                    # Log progress and collect garbage every 5 chapters (ultra-slow mode)
+                    if (idx + 1) % 5 == 0:
                         gc.collect()  # Force garbage collection
                         self._log(f"  📥 Progress: {idx+1}/{total_chapters} (saved: {content_saved})")
                         
                         # Batch cooldown - give RAM time to recover
                         if (idx + 1) < total_chapters:
-                            self._log(f"  ⏸️ Nghỉ 15s để giải phóng RAM...")
-                            await asyncio.sleep(15)
+                            self._log(f"  ⏸️ Nghỉ 30s để giải phóng RAM...")
+                            await asyncio.sleep(30)
             
             self.progress["status"] = "done"
             self.progress["percent"] = 100
