@@ -299,6 +299,11 @@ class CrawlScheduler:
                     if (idx + 1) % 50 == 0:
                         gc.collect()  # Force garbage collection
                         self._log(f"  📥 Progress: {idx+1}/{total_chapters} (saved: {content_saved})")
+                        
+                        # Batch cooldown - give RAM time to recover
+                        if (idx + 1) < total_chapters:
+                            self._log(f"  ⏸️ Nghỉ 15s để giải phóng RAM...")
+                            await asyncio.sleep(15)
             
             self.progress["status"] = "done"
             self.progress["percent"] = 100
