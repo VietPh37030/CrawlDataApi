@@ -350,9 +350,19 @@ async def read_chapter(chapter_id: str, db: Database = Depends(get_db)):
             import httpx
             from ..crawler.parsers import parse_chapter_content
             
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # Headers to avoid anti-bot blocking
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
+                "Referer": "https://truyenfull.vision/",
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as client:
+                print(f"[Chapter] Fetching content from: {chapter['source_url']}")
                 response = await client.get(chapter["source_url"])
                 response.raise_for_status()
+                print(f"[Chapter] Response length: {len(response.text)} bytes")
                 
                 # Parse content từ HTML
                 parsed = parse_chapter_content(response.text, chapter["source_url"])
