@@ -212,22 +212,24 @@ def parse_chapter_content(html: str, url: str) -> Dict[str, Any]:
     # Chapter content
     content_elem = soup.select_one("#chapter-c, .chapter-c, .chapter-content")
     if content_elem:
-        # Remove ads and unwanted elements
-        for unwanted in content_elem.select(".ads, script, .hidden, [style*='display:none']"):
+        # Remove ads and unwanted elements (expanded list based on actual site)
+        for unwanted in content_elem.select(".ads, script, .hidden, [style*='display:none'], .ads-responsive, .ads-mobile, .incontent-ad, div[class*='ad'], div[id*='ad']"):
             unwanted.decompose()
         
-        # Get clean content (preserve paragraphs)
-        paragraphs = content_elem.find_all(['p', 'div'])
-        if paragraphs:
-            content_parts = []
-            for p in paragraphs:
-                text = p.get_text(strip=True)
-                if text and len(text) > 10:  # Filter out short garbage
-                    content_parts.append(text)
-            chapter["content"] = "\n\n".join(content_parts)
-        else:
-            # Fallback: get all text
-            chapter["content"] = content_elem.get_text(separator="\n\n", strip=True)
+        # Get clean content - site uses <br> tags, not <p>
+        # First try to get text with proper line breaks
+        raw_text = content_elem.get_text(separator="\n", strip=True)
+        
+        # Clean up: split into lines, filter garbage, rejoin
+        lines = raw_text.split("\n")
+        content_parts = []
+        for line in lines:
+            line = line.strip()
+            # Keep lines that are actual content (not too short, not ads)
+            if len(line) > 5 and not any(ad in line.lower() for ad in ['quảng cáo', 'advertisement', 'ads', 'click here']):
+                content_parts.append(line)
+        
+        chapter["content"] = "\n\n".join(content_parts)
     
     # Get next/prev chapter links
     next_elem = soup.select_one("#next_chap, a.next_chap, .btn-next")
