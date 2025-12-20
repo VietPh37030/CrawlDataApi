@@ -16,11 +16,20 @@ class CrawlScheduler:
         
         # Realtime tracking
         self.current_story = ""
+        self.current_story_title = ""
         self.crawl_logs: deque = deque(maxlen=20)  # Last 20 logs
         self.stats = {
             "stories_crawled": 0,
             "chapters_saved": 0,
             "errors": 0,
+        }
+        
+        # Progress tracking for current story
+        self.progress = {
+            "current_chapter": 0,
+            "total_chapters": 0,
+            "percent": 0,
+            "status": "idle",  # idle, crawling_list, crawling_story, saving_chapters, done
         }
         
     def _log(self, message: str):
@@ -101,6 +110,10 @@ class CrawlScheduler:
         # Extract title from URL for display
         slug = url.rstrip('/').split('/')[-1]
         self.current_story = slug
+        self.progress["status"] = "crawling_story"
+        self.progress["current_chapter"] = 0
+        self.progress["total_chapters"] = 0
+        self.progress["percent"] = 0
         self._log(f"📖 Bắt đầu crawl: {slug}")
         
         try:
@@ -124,6 +137,7 @@ class CrawlScheduler:
             chapters.sort(key=lambda x: x.get("chapter_number", 0))
             
             total_chapters = len(chapters)
+            self.progress["total_chapters"] = total_chapters
             self._log(f"  📋 Tìm thấy {len(raw_chapters)} chương (Khử trùng còn {total_chapters})")
             
             if total_chapters == 0:
@@ -156,6 +170,8 @@ class CrawlScheduler:
                 self.stats["errors"] += 1
                 return
             
+            self.current_story_title = story['title']
+            self.progress["status"] = "saving_chapters"
             self._log(f"  ✅ Đã lưu truyện: {story['title'][:40]}")
             
             # Lưu TẤT CẢ chapters theo batch để tối ưu
@@ -183,9 +199,11 @@ class CrawlScheduler:
                     await db.bulk_upsert_chapters(chapter_records)
                     saved_count += len(chapter_records)
                     
-                    # Log tiến trình
+                    # Log tiến trình + cập nhật progress
                     progress = min(i + batch_size, total_chapters)
-                    self._log(f"  📝 Đã lưu {progress}/{total_chapters} chapters")
+                    self.progress["current_chapter"] = progress
+                    self.progress["percent"] = int((progress / total_chapters) * 100) if total_chapters > 0 else 0
+                    self._log(f"  📝 Đã lưu {progress}/{total_chapters} chapters ({self.progress['percent']}%)")
                 except Exception as e:
                     self._log(f"  ⚠️ Lỗi batch {i}: {e}")
                     # Fallback: lưu từng chapter
@@ -198,6 +216,8 @@ class CrawlScheduler:
             
             self.stats["stories_crawled"] += 1
             self.stats["chapters_saved"] += saved_count
+            self.progress["status"] = "done"
+            self.progress["percent"] = 100
             self._log(f"  🎉 Hoàn thành: {story['title'][:30]}... ({saved_count}/{total_chapters} chương)")
             
         except Exception as e:
@@ -265,6 +285,8 @@ class CrawlScheduler:
             "interval_minutes": self.interval_minutes,
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "current_story": self.current_story,
+            "current_story_title": self.current_story_title,
+            "progress": self.progress,
             "stats": self.stats,
             "logs": list(self.crawl_logs),
         }
