@@ -222,7 +222,96 @@ class Database:
             "*, stories(id, title, cover_url), chapters(id, chapter_number, title)"
         ).eq("user_id", user_id).order("read_at", desc=True).limit(limit).execute()
         return result.data or []
+    
+    # ========== Storage (GZIP Compressed Chapter Content) ==========
+    
+    STORAGE_BUCKET = "chapters"
+    
+    def _get_storage_path(self, story_id: str, chapter_number: int) -> str:
+        """Generate storage path for chapter content"""
+        return f"{story_id}/chap_{chapter_number}.gz"
+    
+    async def upload_chapter_content(self, story_id: str, chapter_number: int, content: str) -> bool:
+        """
+        Compress and upload chapter content to Supabase Storage
+        Returns True if successful
+        """
+        import gzip
+        
+        if not content:
+            return False
+        
+        try:
+            # Compress content with GZIP
+            compressed_data = gzip.compress(content.encode('utf-8'))
+            path = self._get_storage_path(story_id, chapter_number)
+            
+            # Upload to storage
+            result = self.client.storage.from_(self.STORAGE_BUCKET).upload(
+                path,
+                compressed_data,
+                file_options={"content-type": "application/gzip", "upsert": "true"}
+            )
+            
+            print(f"[Storage] Uploaded {path} ({len(content)} chars -> {len(compressed_data)} bytes)")
+            
+            # Update chapter record with storage path
+            self.client.table("chapters").update({
+                "storage_path": path,
+                "is_archived": True,
+                "content": None  # Clear DB content to save space
+            }).eq("story_id", story_id).eq("chapter_number", chapter_number).execute()
+            
+            return True
+        except Exception as e:
+            print(f"[Storage ERROR] Upload failed: {e}")
+            return False
+    
+    async def download_chapter_content(self, story_id: str, chapter_number: int) -> str | None:
+        """
+        Download and decompress chapter content from Supabase Storage
+        Returns content string or None if not found
+        """
+        import gzip
+        
+        try:
+            path = self._get_storage_path(story_id, chapter_number)
+            
+            # Download from storage
+            data = self.client.storage.from_(self.STORAGE_BUCKET).download(path)
+            
+            if data:
+                # Decompress
+                content = gzip.decompress(data).decode('utf-8')
+                print(f"[Storage] Downloaded {path} ({len(data)} bytes -> {len(content)} chars)")
+                return content
+            return None
+        except Exception as e:
+            print(f"[Storage] Download failed for {story_id}/chap_{chapter_number}: {e}")
+            return None
+    
+    async def get_chapter_content(self, story_id: str, chapter_number: int) -> str | None:
+        """
+        Get chapter content - tries Storage first, then DB column
+        """
+        # Try storage first
+        content = await self.download_chapter_content(story_id, chapter_number)
+        if content:
+            return content
+        
+        # Fallback to DB column (legacy)
+        chapter = await self.get_chapter(story_id, chapter_number)
+        if chapter and chapter.get("content"):
+            return chapter["content"]
+        
+        return None
+    
+    async def is_chapter_archived(self, story_id: str, chapter_number: int) -> bool:
+        """Check if chapter content is saved in storage"""
+        chapter = await self.get_chapter(story_id, chapter_number)
+        return chapter.get("is_archived", False) if chapter else False
 
 
 # Singleton instance
 db = Database()
+

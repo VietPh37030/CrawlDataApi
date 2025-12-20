@@ -336,21 +336,35 @@ async def get_chapter_list(
 async def read_chapter(chapter_id: str, db: Database = Depends(get_db)):
     """
     7. Đọc nội dung chương (Read Chapter)
-    Nếu chưa có content, sẽ tự động crawl từ source_url
+    Storage-first: Check Storage -> DB -> Crawl from source
+    Saves new content to Storage (GZIP compressed)
     """
     chapter = await db.get_chapter_by_id(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chương không tồn tại")
     
-    content = chapter.get("content", "")
+    story_id = chapter.get("story_id")
+    chapter_num = chapter.get("chapter_number", 0)
+    content = ""
     
-    # Nếu content trống, crawl real-time từ source_url
+    # Step 1: Try Storage first (GZIP compressed)
+    if chapter.get("is_archived"):
+        content = await db.download_chapter_content(story_id, chapter_num)
+        if content:
+            print(f"[Chapter] Loaded from Storage: {chapter.get('title')}")
+    
+    # Step 2: Fallback to DB column (legacy)
+    if not content:
+        content = chapter.get("content", "")
+        if content:
+            print(f"[Chapter] Loaded from DB column: {chapter.get('title')}")
+    
+    # Step 3: Crawl from source if still no content
     if not content and chapter.get("source_url"):
         try:
             import httpx
             from ..crawler.parsers import parse_chapter_content
             
-            # Headers to avoid anti-bot blocking
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -359,32 +373,33 @@ async def read_chapter(chapter_id: str, db: Database = Depends(get_db)):
             }
             
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as client:
-                print(f"[Chapter] Fetching content from: {chapter['source_url']}")
+                print(f"[Chapter] Crawling from source: {chapter['source_url']}")
                 response = await client.get(chapter["source_url"])
                 response.raise_for_status()
-                print(f"[Chapter] Response length: {len(response.text)} bytes")
                 
-                # Parse content từ HTML
                 parsed = parse_chapter_content(response.text, chapter["source_url"])
                 content = parsed.get("content", "")
                 
-                # Lưu vào DB để lần sau không cần crawl lại
+                # Save to Storage (GZIP) instead of DB
                 if content:
-                    await db.upsert_chapter({
-                        "story_id": chapter["story_id"],
-                        "chapter_number": chapter["chapter_number"],
-                        "title": chapter["title"],
-                        "source_url": chapter["source_url"],
-                        "content": content,
-                    })
+                    success = await db.upload_chapter_content(story_id, chapter_num, content)
+                    if success:
+                        print(f"[Chapter] Saved to Storage: {chapter.get('title')}")
+                    else:
+                        # Fallback: save to DB if storage fails
+                        await db.upsert_chapter({
+                            "story_id": story_id,
+                            "chapter_number": chapter_num,
+                            "title": chapter["title"],
+                            "source_url": chapter["source_url"],
+                            "content": content,
+                        })
+                        print(f"[Chapter] Saved to DB (fallback): {chapter.get('title')}")
         except Exception as e:
-            print(f"Error fetching chapter content: {e}")
+            print(f"[Chapter ERROR] Fetching failed: {e}")
             content = f"Lỗi tải nội dung: {str(e)}"
     
     # Get prev/next chapters
-    story_id = chapter.get("story_id")
-    chapter_num = chapter.get("chapter_number", 0)
-    
     prev_chapter = await db.get_chapter(story_id, chapter_num - 1)
     next_chapter = await db.get_chapter(story_id, chapter_num + 1)
     
@@ -394,10 +409,126 @@ async def read_chapter(chapter_id: str, db: Database = Depends(get_db)):
         "chapter_number": chapter_num,
         "title": chapter.get("title"),
         "content": content,
+        "is_archived": chapter.get("is_archived", False),
         "navigation": {
             "prev_chapter_id": prev_chapter.get("id") if prev_chapter else None,
             "next_chapter_id": next_chapter.get("id") if next_chapter else None
         }
+    }
+
+
+from fastapi import BackgroundTasks
+
+@router.post("/api/v1/novels/{story_id}/sync-offline", tags=["Reader"])
+async def sync_story_offline(
+    story_id: str, 
+    background_tasks: BackgroundTasks,
+    db: Database = Depends(get_db)
+):
+    """
+    9. Tải Offline toàn bộ nội dung truyện (Sync Offline)
+    Crawl và lưu tất cả chapters vào Storage (GZIP nén)
+    Chạy nền để không block response
+    """
+    story = await db.get_story_by_id(story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Truyện không tồn tại")
+    
+    # Get all chapters that need syncing (not yet archived)
+    chapters = await db.get_chapters_by_story(story_id, limit=10000)
+    chapters_to_sync = [c for c in chapters if not c.get("is_archived")]
+    
+    if not chapters_to_sync:
+        return {
+            "message": "Đã có sẵn offline!",
+            "story_id": story_id,
+            "total_chapters": len(chapters),
+            "already_archived": len(chapters),
+            "to_sync": 0
+        }
+    
+    # Start background sync task
+    async def sync_chapters_task():
+        import httpx
+        from ..crawler.parsers import parse_chapter_content
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "vi-VN,vi;q=0.9",
+            "Referer": "https://truyenfull.vision/",
+        }
+        
+        synced = 0
+        errors = 0
+        
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as client:
+            for i, chapter in enumerate(chapters_to_sync):
+                try:
+                    # Fetch content
+                    response = await client.get(chapter["source_url"])
+                    response.raise_for_status()
+                    
+                    parsed = parse_chapter_content(response.text, chapter["source_url"])
+                    content = parsed.get("content", "")
+                    
+                    if content:
+                        # Upload to Storage
+                        success = await db.upload_chapter_content(
+                            chapter["story_id"], 
+                            chapter["chapter_number"], 
+                            content
+                        )
+                        if success:
+                            synced += 1
+                    
+                    # Rate limiting - 0.5s between requests
+                    if i < len(chapters_to_sync) - 1:
+                        import asyncio
+                        await asyncio.sleep(0.5)
+                        
+                except Exception as e:
+                    print(f"[Sync ERROR] Chapter {chapter.get('chapter_number')}: {e}")
+                    errors += 1
+                
+                # Log progress every 50 chapters
+                if (i + 1) % 50 == 0:
+                    print(f"[Sync] Progress: {i+1}/{len(chapters_to_sync)} (synced: {synced}, errors: {errors})")
+        
+        print(f"[Sync COMPLETE] Story {story_id}: {synced}/{len(chapters_to_sync)} chapters synced")
+    
+    # Run in background
+    background_tasks.add_task(sync_chapters_task)
+    
+    return {
+        "message": "Đang tải offline...",
+        "story_id": story_id,
+        "story_title": story.get("title"),
+        "total_chapters": len(chapters),
+        "already_archived": len(chapters) - len(chapters_to_sync),
+        "to_sync": len(chapters_to_sync),
+        "status": "processing"
+    }
+
+
+@router.get("/api/v1/novels/{story_id}/offline-status", tags=["Reader"])
+async def get_offline_status(story_id: str, db: Database = Depends(get_db)):
+    """
+    10. Kiểm tra trạng thái offline của truyện
+    """
+    story = await db.get_story_by_id(story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Truyện không tồn tại")
+    
+    chapters = await db.get_chapters_by_story(story_id, limit=10000)
+    archived_count = sum(1 for c in chapters if c.get("is_archived"))
+    
+    return {
+        "story_id": story_id,
+        "story_title": story.get("title"),
+        "total_chapters": len(chapters),
+        "archived_chapters": archived_count,
+        "percent_complete": round(archived_count / len(chapters) * 100, 1) if chapters else 0,
+        "is_complete": archived_count == len(chapters)
     }
 
 
