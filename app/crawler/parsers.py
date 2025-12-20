@@ -252,33 +252,59 @@ def get_pagination_info(html: str) -> Dict[str, Any]:
         "prev_page_url": None,
     }
     
-    # Find pagination
-    pager = soup.select_one(".pagination, ul.pagination")
+    # Find pagination - try multiple selectors
+    pager = soup.select_one(".pagination, ul.pagination, #pagination")
+    if not pager:
+        # Try finding in #list-chapter area
+        pager = soup.select_one("#list-chapter .pagination, .list-chapter .pagination")
+    
     if pager:
         # Current page
-        active = pager.select_one(".active, li.active")
+        active = pager.select_one(".active, li.active, a.active")
         if active:
             try:
                 pagination["current_page"] = int(active.get_text(strip=True))
             except ValueError:
                 pass
         
-        # Total pages (last page number)
-        page_links = pager.select("a[href*='trang-']")
-        if page_links:
-            for link in reversed(page_links):
-                text = link.get_text(strip=True)
+        # Method 1: Find "Cuối" (Last) link and extract page number
+        last_link = pager.select_one("a[title*='Cuối'], a:contains('Cuối'), a:contains('»»')")
+        if last_link and last_link.get("href"):
+            match = re.search(r'trang-(\d+)', last_link.get("href"))
+            if match:
+                pagination["total_pages"] = int(match.group(1))
+        
+        # Method 2: Find max page from all 'trang-X' links
+        if pagination["total_pages"] == 1:
+            page_links = pager.select("a[href*='trang-']")
+            max_page = 1
+            for link in page_links:
+                href = link.get("href", "")
+                match = re.search(r'trang-(\d+)', href)
+                if match:
+                    page_num = int(match.group(1))
+                    if page_num > max_page:
+                        max_page = page_num
+            pagination["total_pages"] = max_page
+        
+        # Method 3: Check for page numbers in text
+        if pagination["total_pages"] == 1:
+            page_items = pager.select("a, span")
+            for item in page_items:
+                text = item.get_text(strip=True)
                 if text.isdigit():
-                    pagination["total_pages"] = int(text)
-                    break
+                    page_num = int(text)
+                    if page_num > pagination["total_pages"]:
+                        pagination["total_pages"] = page_num
         
         # Next/Prev links
-        next_link = pager.select_one("a[rel='next'], li.next a")
-        prev_link = pager.select_one("a[rel='prev'], li.prev a")
+        next_link = pager.select_one("a[rel='next'], li.next a, a.next, a[title*='Sau'], a:contains('»')")
+        prev_link = pager.select_one("a[rel='prev'], li.prev a, a.prev, a[title*='Trước'], a:contains('«')")
         
         if next_link and next_link.get("href"):
             pagination["next_page_url"] = urljoin(BASE_URL, next_link.get("href"))
         if prev_link and prev_link.get("href"):
             pagination["prev_page_url"] = urljoin(BASE_URL, prev_link.get("href"))
     
+    print(f"[Pagination] Pages: {pagination['total_pages']}, Current: {pagination['current_page']}")
     return pagination
