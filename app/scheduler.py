@@ -7,6 +7,9 @@ from typing import Optional, List
 from collections import deque
 import gc  # Memory management
 
+# Giới hạn concurrent requests để tránh tràn RAM
+CRAWL_SEMAPHORE = asyncio.Semaphore(2)  # Chỉ 2 requests cùng lúc
+
 class CrawlScheduler:
     def __init__(self):
         self.is_running = False
@@ -94,7 +97,8 @@ class CrawlScheduler:
             )
             self._log(f"📋 Tìm thấy {len(stories)} truyện")
             
-            for story_info in stories[:10]:
+            # Chỉ xử lý 3 truyện mỗi lần để tiết kiệm RAM
+            for story_info in stories[:3]:
                 if not self.auto_enabled:
                     break
                 try:
@@ -230,8 +234,8 @@ class CrawlScheduler:
             self.progress["status"] = "syncing_content"
             self._log(f"  ✅ Đã lưu metadata: {saved_count}/{total_chapters} chương")
             
-            # ===== PHASE 2: Crawl nội dung tất cả chapters =====
-            self._log(f"  📥 Đang tải nội dung (offline mode)...")
+            # ===== PHASE 2: Crawl nội dung chapters (Memory-optimized) =====
+            self._log(f"  📥 Đang tải nội dung (low-memory mode)...")
             
             import httpx
             from .crawler.parsers import parse_chapter_content
@@ -245,7 +249,15 @@ class CrawlScheduler:
             content_saved = 0
             content_errors = 0
             
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as client:
+            # Giới hạn connections để tiết kiệm RAM
+            limits = httpx.Limits(max_keepalive_connections=1, max_connections=2)
+            
+            async with httpx.AsyncClient(
+                timeout=30.0, 
+                follow_redirects=True, 
+                headers=headers,
+                limits=limits  # Giới hạn kết nối
+            ) as client:
                 for idx, ch in enumerate(chapters):
                     if not self.is_running and not self.auto_enabled:
                         self._log(f"  ⏹️ Dừng tải nội dung")
@@ -258,19 +270,20 @@ class CrawlScheduler:
                             content_saved += 1
                             continue
                         
-                        # Fetch content from source
-                        response = await client.get(ch["source_url"])
-                        response.raise_for_status()
-                        
-                        # Parse and immediately release response memory
-                        html_text = response.text
-                        response = None  # Release response memory
-                        
-                        parsed = parse_chapter_content(html_text, ch["source_url"])
-                        html_text = None  # Release HTML memory
-                        
-                        content = parsed.get("content", "")
-                        parsed = None  # Release parsed data
+                        # Fetch with Semaphore to limit concurrent requests
+                        async with CRAWL_SEMAPHORE:
+                            response = await client.get(ch["source_url"])
+                            response.raise_for_status()
+                            
+                            # Parse and immediately release response memory
+                            html_text = response.text
+                            del response  # Xóa ngay khỏi RAM
+                            
+                            parsed = parse_chapter_content(html_text, ch["source_url"])
+                            del html_text  # Xóa ngay khỏi RAM
+                            
+                            content = parsed.get("content", "")
+                            del parsed  # Xóa ngay khỏi RAM
                         
                         if content:
                             # Save to Storage (GZIP)
