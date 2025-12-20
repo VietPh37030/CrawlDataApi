@@ -250,7 +250,7 @@ class Database:
             result = self.client.storage.from_(self.STORAGE_BUCKET).upload(
                 path,
                 compressed_data,
-                file_options={"content-type": "application/gzip", "upsert": "true"}
+                file_options={"content-type": "application/octet-stream", "upsert": "true"}
             )
             
             print(f"[Storage] Uploaded {path} ({len(content)} chars -> {len(compressed_data)} bytes)")
