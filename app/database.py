@@ -94,12 +94,34 @@ class Database:
         return result.data[0] if result.data else None
     
     async def bulk_upsert_chapters(self, chapters: list) -> list:
-        """Bulk insert/update chapters"""
-        result = self.client.table("chapters").upsert(
-            chapters,
-            on_conflict="story_id,chapter_number"
-        ).execute()
-        return result.data or []
+        """Bulk insert/update chapters with logging"""
+        if not chapters:
+            return []
+        
+        try:
+            result = self.client.table("chapters").upsert(
+                chapters,
+                on_conflict="story_id,chapter_number"
+            ).execute()
+            
+            saved_count = len(result.data) if result.data else 0
+            print(f"[DB] Upserted {saved_count}/{len(chapters)} chapters")
+            return result.data or []
+        except Exception as e:
+            print(f"[DB ERROR] bulk_upsert_chapters failed: {e}")
+            # Try one by one as fallback
+            saved = []
+            for ch in chapters:
+                try:
+                    r = self.client.table("chapters").upsert(
+                        ch, on_conflict="story_id,chapter_number"
+                    ).execute()
+                    if r.data:
+                        saved.extend(r.data)
+                except Exception as inner_e:
+                    print(f"[DB ERROR] Single chapter upsert failed: {inner_e}")
+            print(f"[DB] Fallback saved {len(saved)}/{len(chapters)} chapters")
+            return saved
     
     async def get_chapters_count(self, story_id: str) -> int:
         """Get total count of chapters for a story"""

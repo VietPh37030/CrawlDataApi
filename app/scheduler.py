@@ -196,23 +196,20 @@ class CrawlScheduler:
                     })
                 
                 try:
-                    await db.bulk_upsert_chapters(chapter_records)
-                    saved_count += len(chapter_records)
+                    result = await db.bulk_upsert_chapters(chapter_records)
+                    # Đếm chapters THỰC SỰ được lưu từ response
+                    actual_saved = len(result) if result else 0
+                    saved_count += actual_saved
                     
                     # Log tiến trình + cập nhật progress
                     progress = min(i + batch_size, total_chapters)
                     self.progress["current_chapter"] = progress
+                    self.progress["total_chapters"] = total_chapters
                     self.progress["percent"] = int((progress / total_chapters) * 100) if total_chapters > 0 else 0
-                    self._log(f"  📝 Đã lưu {progress}/{total_chapters} chapters ({self.progress['percent']}%)")
+                    self._log(f"  📝 Đã lưu {actual_saved}/{len(chapter_records)} chapters (tổng: {saved_count})")
                 except Exception as e:
                     self._log(f"  ⚠️ Lỗi batch {i}: {e}")
-                    # Fallback: lưu từng chapter
-                    for ch_rec in chapter_records:
-                        try:
-                            await db.upsert_chapter(ch_rec)
-                            saved_count += 1
-                        except Exception:
-                            continue
+                    self.stats["errors"] += 1
             
             self.stats["stories_crawled"] += 1
             self.stats["chapters_saved"] += saved_count
